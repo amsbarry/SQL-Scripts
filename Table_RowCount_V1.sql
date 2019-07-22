@@ -1,7 +1,6 @@
-USE Mastyer;
+USE Master;
 GO 
-SELECT TOP 1000
-        @@SERVERNAME AS [Server Name] ,
+SELECT  @@SERVERNAME AS [Server Name] ,
         DB_NAME() AS [Database Name] ,
         a2.name AS [Table Name] ,
         a1.rows AS [Row Count] ,
