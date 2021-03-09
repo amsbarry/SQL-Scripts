@@ -1,0 +1,77 @@
+USE [msdb]
+GO
+
+/****** Object:  StoredProcedure [dbo].[AddCMSEntry]    Script Date: 3/9/2021 12:34:15 PM ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+-- =============================================
+-- Author:		Chad Estes
+-- Create date: 2018-12-10
+-- Description:	Add a server to CMS
+-- =============================================
+CREATE PROCEDURE [dbo].[AddCMSEntry] 
+	-- Add the parameters for the stored procedure here
+	@branch sysname = NULL, 
+	@group  sysname = NULL,
+	@server sysname = NULL
+AS
+BEGIN
+	-- SET NOCOUNT ON added to prevent extra result sets from
+	-- interfering with SELECT statements.
+	SET NOCOUNT ON;
+	SET CONCAT_NULL_YIELDS_NULL ON;
+    -- Insert statements for procedure here
+	IF ( CONCAT(@branch,@group,@server) IS NOT NULL ) 
+	BEGIN
+		DECLARE @pID INT
+		DECLARE @gID INT
+		DECLARE @sID INT
+
+		--Make sure Server Group exists
+		SET @pID = (SELECT [server_group_id] FROM [msdb].[dbo].[sysmanagement_shared_server_groups_internal] WHERE [name] = @branch)
+		IF (@pID IS NULL)
+		BEGIN
+			SET @pID = (SELECT [server_group_id] FROM [dbo].[sysmanagement_shared_server_groups_internal] WHERE [server_type]=0 AND [is_system_object]=1)
+			EXEC [dbo].[sp_sysmanagement_add_shared_server_group]
+				@name=@branch,
+				@description=N'',
+				@parent_id=@pID,
+				@server_type=0,
+				@server_group_id=@pID OUTPUT
+		END		
+
+		SET @gID = (SELECT [server_group_id] FROM [dbo].[sysmanagement_shared_server_groups_internal] WHERE [name] = @group AND parent_id = @pID)
+		IF (@gID IS NULL)
+		BEGIN
+			EXEC [dbo].[sp_sysmanagement_add_shared_server_group]
+				@name=@group,
+				@description=N'',
+				@parent_id=@pID,
+				@server_type=0,
+				@server_group_id=@gID OUTPUT
+		END
+
+		IF NOT EXISTS (SELECT 1 FROM [dbo].[sysmanagement_shared_registered_servers_internal] WHERE [server_name]=@server AND [server_group_id]=@gID)
+		BEGIN
+			EXEC [dbo].[sp_sysmanagement_add_shared_registered_server]
+				@name=@server,
+				@server_group_id=@gID,
+				@server_name=@server,
+				@description=N'',
+				@server_type=0,
+				@server_id=@gID OUTPUT
+		END
+
+	END
+	ELSE
+	BEGIN
+		RAISERROR (N'NULL values are not allowed, please specify all parameters.', 10, 1) WITH NOWAIT
+	END
+END
+GO
+
+
