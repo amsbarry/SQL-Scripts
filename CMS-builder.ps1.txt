@@ -1,0 +1,87 @@
+﻿Clear-Host
+Import-Module ActiveDirectory
+[void][Reflection.Assembly]::LoadWithPartialName('Microsoft.VisualBasic')
+Function Get-FileName($initialDirectory){   
+    [System.Reflection.Assembly]::LoadWithPartialName("System.windows.forms") |
+    Out-Null
+
+    $OpenFileDialog = New-Object System.Windows.Forms.OpenFileDialog
+    $OpenFileDialog.initialDirectory = $initialDirectory
+    $OpenFileDialog.Title = "Select file containing Servers"
+    $OpenFileDialog.filter = "Text files | *.txt;*.csv | Any File | *.*"
+    $OpenFileDialog.ShowDialog() | Out-Null
+    $OpenFileDialog.filename
+} #end function Get-FileName
+Function Get-SQLInstancesOn($server) {
+    [System.Collections.ArrayList]$insts = @()
+    Try {
+        $srvcs=Get-WmiObject win32_service -ComputerName "$server" -EA Stop | Where-Object {$_.Name -like "MSSQL*" -and $_.DisplayName -like "SQL Server (*"}
+
+        if ($srvcs)
+        {
+            foreach ($srvc in $srvcs)
+            {
+                if($srvc.SystemName){$sysn=$srvc.SystemName.Replace("'","").Replace("""",""); $sysn="'"+$sysn.Substring(0,[math]::min($sysn.Length,127))+"'"}else{$sysn=$server}
+                if($srvc.Name){$name=$srvc.Name.Replace("'","").Replace("""","");$name="'"+$name.Substring(0,[math]::min($name.Length,255))+"'"}else{$name="''"}
+                if ($name -ne "'MSSQLSERVER'"){
+                    $inst = "$sysn\$($name.Substring($name.IndexOf('$')+1))"
+                } else {
+                    $inst = "$sysn"
+                }
+                [void]$insts.add($inst.Replace("'",""))
+            }
+        }
+    } catch {
+        #Write-Host "Error with $server!"
+        [void]$insts.Add($server)
+    }
+    Return ,$insts
+} #end function Get-Instances
+
+$file = Get-FileName -initialDirectory "\\XXXXX\XX\XX"
+$list = $($(Get-Content($file)).Replace(',',' ').Replace(';',' ')).Split().Trim(' ')
+
+[System.Collections.ArrayList]$servers = @()
+
+ForEach ($item in $($list | Sort-Object -Property Environment, ServerName )) {
+    If ("$item" -ne "$null") {          
+        [void]$servers.Add($([PSCustomObject]@{
+            ServerName = $item
+            Environment = $(switch -Wildcard ( $item ) {
+                'P-*'     {'Prod'}
+                'B-*'     {'Beta'}
+                'U-*'     {'Beta'}
+                'Q-*'     {'QA'}
+                'D-*'     {'Dev'}
+                '*DEV*'   {'Dev'}
+                '*QA*'    {'QA'}
+                '*BETA*'  {'Beta'}
+                default   {'Prod'}
+            })
+        }))
+    }
+}
+
+$environments = $($($servers.Environment) | Sort-Object | Get-Unique)
+$null = [Microsoft.VisualBasic.Interaction]::MsgBox("$($servers.count) server(s) discovered in $($environments.count) environment(s).", [Microsoft.VisualBasic.MsgBoxStyle]::Information + [Microsoft.VisualBasic.MsgBoxStyle]::SystemModal + [Microsoft.VisualBasic.MsgBoxStyle]::OkOnly, "Discovery output")
+$branch = [Microsoft.VisualBasic.Interaction]::InputBox("Provide a name for the CMS Branch in which to place these servers.", "Build CMS Branch")
+
+$lastEnv = $null
+Write-Host "+$branch"
+ForEach ($server in ($servers | Sort-object -Property Environment, ServerName )){
+    [System.Collections.ArrayList]$Instances = Get-SQLInstancesOn("$($server.ServerName)")
+
+    If ("$($server.Environment)" -ne "$lastEnv") {
+        $lastEnv = $server.Environment
+        Write-Host "   +$lastEnv"
+    }
+    ForEach ($Instance in $Instances) {
+        Write-Host "      +$Instance"
+        sqlcmd -S "XXXXX" -d "msdb" -E -b -Q @"
+            EXECUTE [dbo].[AddCMSEntry] 
+               @branch = N'$branch'
+              ,@group = N'$lastEnv'
+              ,@server = N'$Instance'
+"@
+    }
+}
